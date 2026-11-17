@@ -185,11 +185,21 @@ async function deriveKey(pw,s){
   const base=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2',salt:s,iterations:250000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
+const KEY2='cofrinho-dados';
+function dGet(){try{return localStorage.getItem(KEY2)}catch(e){return null}}
 async function save(){
-  const iv=crypto.getRandomValues(new Uint8Array(12));
-  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},cryptoKey,enc.encode(JSON.stringify(state)));
-  if(!lsSet(JSON.stringify({v:1,salt:b64(salt),iv:b64(iv),ct:b64(ct)})))toast('Não consegui salvar neste aparelho');
+  try{localStorage.setItem(KEY2,JSON.stringify(state))}catch(e){toast('Não consegui salvar neste aparelho')}
 }
+function lerPacote(t){
+  if(!t)return null;const i=t.indexOf('COFRINHO');if(i<0)return null;
+  try{
+    const o=JSON.parse(t.slice(t.indexOf('{',i),t.lastIndexOf('}')+1));
+    const ok=(o.itens||[]).filter(x=>x&&x.desc&&+x.valor>0&&/^\d{4}-\d{2}$/.test(x.mes)&&(x.tipo==='saida'||x.tipo==='entrada'));
+    const novos=ok.filter(x=>!x.ref||!state.itens.some(y=>y.ref===x.ref)).map(x=>({ref:x.ref||null,tipo:x.tipo,desc:String(x.desc),valor:r2(+x.valor),mes:x.mes,dia:x.dia?+x.dia:null,rec:!!x.rec,ate:x.ate||null,quem:x.quem?String(x.quem):'',pagos:x.pagoAgora?[x.mes]:[],_agora:!!x.pagoAgora}));
+    return {novos,repetidos:ok.length-novos.length};
+  }catch(e){return null}
+}
+function carregar(obj){state=Object.assign(novoEstado(),obj);ui.mes=curMonth();state.configurado?render():telaSetup()}
 function novoEstado(){
   return {saldo:0,itens:[],lanc:[],metas:[],cats:CATS_PADRAO.map(c=>({...c})),inicioLimites:curMonth(),cartao:null,faturasPagas:{},configurado:false};
 }
@@ -327,48 +337,39 @@ function telaBoasVindas(){
     <div class="feat"><i class="ti ti-plus"></i><span>Anote um gasto em dois toques</span></div>
     <div class="feat"><i class="ti ti-gauge"></i><span>Defina o teto do mês e veja o que sobra</span></div>
     <div class="feat"><i class="ti ti-pig-money"></i><span>Junte dinheiro pra suas metas</span></div>
-    <div class="feat" style="border:0"><i class="ti ti-lock"></i><span>Tudo fica só no seu aparelho, com senha</span></div>
+    <div class="feat" style="border:0"><i class="ti ti-device-mobile"></i><span>Tudo fica só no seu aparelho</span></div>
     <button class="btn" style="margin-top:18px" id="go">Continuar</button>
   </div>`;
-  $('go').onclick=()=>telaSenha(false);
+  $('go').onclick=()=>{state=novoEstado();telaSetup()};
 }
-function telaSenha(existe){
-  closeSheet();cryptoKey=null;state=null;clearTimeout(idleTimer);
+/* só pra quem tinha a versão com senha: pede uma última vez e tira a senha */
+function telaSenha(){
+  closeSheet();state=null;
   $('app').innerHTML=`<form class="lock" id="lockForm" autocomplete="off">
-    <div class="center">${mascote(existe?'julgando':'ok',100)}</div>
-    <h1 class="center" style="font-size:24px;font-weight:800;margin:10px 0 4px">${existe?'Oi de novo':'Crie uma senha'}</h1>
-    <p class="center mu" style="margin:0 0 16px">${existe?'Digite sua senha pra abrir.':'Só quem souber ela consegue ver seus dados.'}</p>
-    <input class="f" type="password" id="pw1" placeholder="Senha" inputmode="text" autocomplete="${existe?'current-password':'new-password'}">
-    ${existe?'':'<input class="f" type="password" id="pw2" placeholder="Repita a senha" style="margin-top:8px" autocomplete="new-password">'}
+    <div class="center">${mascote('ok',100)}</div>
+    <h1 class="center" style="font-size:24px;font-weight:800;margin:10px 0 4px">Última vez, prometo</h1>
+    <p class="center mu" style="margin:0 0 16px">Digite sua senha só mais essa vez. Depois disso o app abre direto, sem senha.</p>
+    <input class="f" type="password" id="pw1" placeholder="Senha" autocomplete="current-password">
     <p class="err" id="lockErr"></p>
-    <button class="btn" type="submit">${existe?'Abrir':'Criar senha'}</button>
-    ${existe?'':'<p class="mu small center" style="margin:14px 0 0">Guarde bem essa senha: se esquecer, não tem como recuperar os dados.</p>'}
+    <button class="btn" type="submit">Abrir e tirar a senha</button>
+    <button class="link" type="button" id="esqueci" style="margin:16px auto 0;display:block;color:var(--mute)">Esqueci a senha · começar do zero</button>
   </form>`;
   const f=$('lockForm');
   setTimeout(()=>$('pw1').focus(),50);
-  f.querySelectorAll('input').forEach(i=>i.oninput=()=>{$('lockErr').textContent=''});
+  $('pw1').oninput=()=>{$('lockErr').textContent=''};
+  $('esqueci').onclick=()=>{if(!confirm('Começar do zero? Os dados antigos deste aparelho serão apagados.'))return;try{localStorage.removeItem(KEY)}catch(e){}telaBoasVindas()};
   f.onsubmit=async e=>{
     e.preventDefault();
     const err=$('lockErr'),pw=$('pw1').value,btn=f.querySelector('button');
-    const reset=()=>{btn.disabled=false;btn.textContent=existe?'Abrir':'Criar senha'};
-    if(!pw){err.textContent='Digite uma senha.';return}
-    if(!existe){
-      if(pw.length<4){err.textContent='Use pelo menos 4 caracteres.';return}
-      if(pw!==$('pw2').value){err.textContent='As senhas não são iguais.';return}
-    }
+    if(!pw){err.textContent='Digite a senha.';return}
     btn.disabled=true;btn.textContent='Abrindo…';
     try{
-      if(existe){
-        const blob=JSON.parse(lsGet());salt=unb64(blob.salt);cryptoKey=await deriveKey(pw,salt);
-        const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(blob.iv)},cryptoKey,unb64(blob.ct));
-        state=Object.assign(novoEstado(),JSON.parse(dec.decode(pt)));
-      }else{
-        salt=crypto.getRandomValues(new Uint8Array(16));cryptoKey=await deriveKey(pw,salt);
-        state=novoEstado();await save();
-      }
-      ui.mes=curMonth();bumpIdle();
-      state.configurado?render():telaSetup();
-    }catch(x){cryptoKey=null;err.textContent=existe?'Senha incorreta.':'Não deu certo. Tente de novo.';reset()}
+      const blob=JSON.parse(lsGet());const k=await deriveKey(pw,unb64(blob.salt));
+      const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(blob.iv)},k,unb64(blob.ct));
+      state=Object.assign(novoEstado(),JSON.parse(dec.decode(pt)));
+      await save();try{localStorage.removeItem(KEY)}catch(e){}
+      carregar(state);toast('Pronto, sem senha daqui pra frente');
+    }catch(x){err.textContent='Senha incorreta.';btn.disabled=false;btn.textContent='Abrir e tirar a senha'}
   };
 }
 function telaSetup(){
@@ -408,9 +409,6 @@ function telaSetup(){
     await save();render();toast('Tudo pronto');
   };
 }
-function bumpIdle(){clearTimeout(idleTimer);if(state)idleTimer=setTimeout(()=>telaSenha(true),10*60*1000)}
-['click','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,bumpIdle,{passive:true}));
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&state){clearTimeout(idleTimer);idleTimer=setTimeout(()=>telaSenha(true),2*60*1000)}});
 
 /* ---------- início ---------- */
 function topo(){
@@ -590,6 +588,7 @@ function telaPlanejar(){
       :`<p class="mu small" style="margin:8px 0 0">${tipo==='entrada'?'Nada a receber lançado.':'Nenhum fixo, parcela ou dívida lançado.'}</p>`};
   const P=projecao(7);
   return `<div style="height:8px"></div><h1 class="page">Planejar</h1>
+    <div class="card" style="background:var(--card2)"><div class="row"><div><h3><i class="ti ti-clipboard-text"></i> Colar do Claude</h3><p class="mu small" style="margin:4px 0 0">Copiou um texto que o Claude mandou? Toque em Colar.</p></div><button class="btn" style="width:auto;padding:10px 18px;flex:none" data-a="colar">Colar</button></div></div>
     <div class="card"><div class="row"><div><p class="mu small" style="margin:0">Saldo em conta hoje</p><p style="margin:0;font-size:24px;font-weight:800">${brl(state.saldo)}</p></div><button class="link" data-a="editSaldo">Editar <i class="ti ti-chevron-right"></i></button></div></div>
     <div class="card" id="secFix"><div class="row"><h3><i class="ti ti-repeat"></i> Fixos, contas e dívidas</h3><button class="link" data-a="novoItem" data-tipo="saida"><i class="ti ti-plus"></i> Novo</button></div>${lista('saida')}</div>
     <div class="card"><div class="row"><h3><i class="ti ti-arrow-down-left"></i> A receber</h3><button class="link" data-a="novoItem" data-tipo="entrada"><i class="ti ti-plus"></i> Novo</button></div>${lista('entrada')}</div>
@@ -608,13 +607,12 @@ function telaPlanejar(){
       ${P.map(l=>{const sai=r2(l.sai+l.dia+l.meta+l.cartao);return `<tr><td>${mLabel(l.m)}</td><td class="pos">${l.entra?'+'+brl0(l.entra):'—'}</td><td>${sai?'−'+brl0(sai):'—'}</td><td class="${l.fim<0?'neg':''}"><strong>${brl0(l.fim)}</strong></td></tr>`}).join('')}
       </tbody></table>
       <p class="mu small" style="margin:8px 0 0">"Sai" inclui fixos, metas no mês do prazo, faturas e o limite do dia a dia.</p></div>
-    <div class="card"><h3><i class="ti ti-shield-lock"></i> Privacidade</h3>
-      <p class="mu small" style="margin:6px 0 10px">Seus dados ficam só neste aparelho, criptografados com a sua senha. Celular e computador não se falam sozinhos: use o backup pra levar de um pro outro.</p>
+    <div class="card"><h3><i class="ti ti-device-mobile"></i> Seus dados</h3>
+      <p class="mu small" style="margin:6px 0 10px">Ficam só neste aparelho. Celular e computador não se falam sozinhos: use o backup pra levar de um pro outro.</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn sec" style="background:#fff" data-a="export"><i class="ti ti-download"></i> Backup</button>
         <button class="btn sec" style="background:#fff" data-a="import"><i class="ti ti-upload"></i> Restaurar</button>
       </div>
-      <button class="btn" style="margin-top:8px" data-a="lock"><i class="ti ti-lock"></i> Bloquear agora</button>
     </div>`;
 }
 
@@ -673,6 +671,13 @@ function drawSheet(){
     html=shell(sh.k==='guardar'?`Guardar pra ${esc(mt.nome.toLowerCase())}`:`Tirar de ${esc(mt.nome.toLowerCase())}`,`<p class="amount" style="margin-top:14px">${money(v)}</p><p class="hint">${hint}</p>${pad()}
       <p class="err" id="shErr"></p><button class="btn" data-a="confirmarMeta">${sh.k==='guardar'?'Guardar':'Tirar'}</button>
       <p class="mu small center" style="margin:10px 0 0">${sh.k==='guardar'?'O dinheiro continua na sua conta, só fica separado pra meta.':'Volta pro livre na conta.'}</p>`);
+  }else if(sh.k==='colar'){
+    if(!sh.p)html=shell('Colar do Claude',`<p class="mu small" style="margin:10px 0 8px">Cole aqui o texto que o Claude te mandou (começa com COFRINHO).</p>
+      <textarea id="colaTxt" rows="5" style="width:100%;border:1px solid var(--line);border-radius:14px;padding:12px;font-size:13px;outline:none;resize:vertical"></textarea>
+      <p class="err" id="shErr"></p><button class="btn" data-a="lerColado">Ler texto</button>`);
+    else html=shell('Adicionar ao app',`<p class="mu small" style="margin:10px 0 4px">${sh.p.novos.length?'Confere se está certo:':'Esses itens já estão no app.'}${sh.p.repetidos?` (${sh.p.repetidos} já ${sh.p.repetidos===1?'estava':'estavam'} no app e não vão ser repetidos)`:''}</p>
+      <div class="card" style="padding:4px 14px;margin:8px 0 14px">${sh.p.novos.map(it=>linhaItem(it,it.rec&&it.mes<curMonth()?curMonth():it.mes,false)+(it._agora?`<p class="small" style="margin:-6px 0 8px;color:var(--ink);font-weight:600">${it.tipo==='saida'?'Paga agora: sai':'Recebida agora: entra'} ${brl(it.valor)} do saldo</p>`:'')).join('')||'<p class="mu small">Nada novo.</p>'}</div>
+      ${sh.p.novos.length?'<button class="btn" data-a="addPacote">Adicionar tudo</button>':'<button class="btn" data-a="close">Fechar</button>'}`);
   }else if(sh.k==='pagar'){
     const it=state.itens.find(i=>i.id===sh.id),S=it.tipo==='saida';
     html=shell(S?'Marcar como pago':'Marcar como recebido',`
@@ -841,11 +846,21 @@ document.addEventListener('click',async e=>{
       if(!confirm(`Pagar a fatura de ${brl(t)}? Sai do seu saldo.`))return;
       state.faturasPagas[fm]=true;state.saldo=r2(state.saldo-t);await save();render();toast('Fatura paga');return;
     }
-    case 'lock':telaSenha(true);return;
     case 'export':{
-      const raw=lsGet();if(!raw)return;
-      const el=document.createElement('a');el.href=URL.createObjectURL(new Blob([raw],{type:'application/json'}));
-      el.download='cofrinho-backup-'+today()+'.json';el.click();toast('Backup baixado (protegido pela senha)');return;
+      const el=document.createElement('a');el.href=URL.createObjectURL(new Blob([JSON.stringify(state)],{type:'application/json'}));
+      el.download='cofrinho-backup-'+today()+'.json';el.click();toast('Backup baixado');return;
+    }
+    case 'colar':{
+      let t='';try{t=await Promise.race([navigator.clipboard.readText(),new Promise(r=>setTimeout(()=>r(''),2500))])}catch(x){}
+      const p=lerPacote(t);
+      if(p)openSheet({k:'colar',p});else openSheet({k:'colar',p:null});
+      return;
+    }
+    case 'lerColado':{const p=lerPacote($('colaTxt').value);if(!p){$('shErr').textContent='Não reconheci esse texto. Copie de novo o que o Claude mandou.';return}sh.p=p;drawSheet();return}
+    case 'addPacote':{
+      let n=0;
+      for(const it of sh.p.novos){const {_agora,...dados}=it;state.itens.push({id:uid(),...dados});if(_agora)state.saldo=r2(state.saldo+(it.tipo==='entrada'?1:-1)*it.valor);n++}
+      closeSheet();await save();ui.tab='inicio';render();scrollTo(0,0);toast(`${n} ${n===1?'item adicionado':'itens adicionados'}`);return;
     }
   }
 });
@@ -893,10 +908,12 @@ document.addEventListener('keydown',e=>{
 $('importFile').addEventListener('change',e=>{
   const file=e.target.files[0];if(!file)return;
   const rd=new FileReader();
-  rd.onload=()=>{
-    try{const o=JSON.parse(rd.result);if(!o.salt||!o.iv||!o.ct)throw 0;
-      if(lsGet()&&!confirm('Isso troca os dados deste aparelho pelos do backup. Continuar?'))return;
-      lsSet(JSON.stringify(o));toast('Backup restaurado. Digite a senha dele.');telaSenha(true);
+  rd.onload=async()=>{
+    try{const o=JSON.parse(rd.result);
+      if((dGet()||lsGet())&&!confirm('Isso troca os dados deste aparelho pelos do backup. Continuar?'))return;
+      if(o.salt&&o.iv&&o.ct){lsSet(JSON.stringify(o));try{localStorage.removeItem(KEY2)}catch(e){}toast('Backup antigo: digite a senha dele');telaSenha();}
+      else if(Array.isArray(o.itens)){state=Object.assign(novoEstado(),o);await save();try{localStorage.removeItem(KEY)}catch(e){}carregar(state);toast('Backup restaurado')}
+      else throw 0;
     }catch(x){toast('Esse arquivo não é um backup válido')}
     e.target.value='';
   };
@@ -904,9 +921,9 @@ $('importFile').addEventListener('change',e=>{
 });
 
 /* ---------- início ---------- */
-if(!window.crypto||!crypto.subtle){
-  $('app').innerHTML='<div class="lock"><h1 style="font-size:20px">Navegador sem suporte</h1><p class="mu">Abra no Chrome, Edge ou Safari.</p></div>';
-}else if(lsGet())telaSenha(true);
+let salvo=null;try{salvo=JSON.parse(dGet()||'null')}catch(e){}
+if(salvo)carregar(salvo);
+else if(lsGet())telaSenha();
 else{
   telaBoasVindas();
   const l=$('app').querySelector('.lock');
