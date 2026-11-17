@@ -242,9 +242,41 @@ const metasAtivas=()=>state.metas.filter(m=>!m.usada);
 const guardadoTotal=()=>r2(metasAtivas().reduce((a,m)=>a+m.guardado,0));
 const livre=()=>r2(state.saldo-guardadoTotal());
 const pago=(it,m)=>(it.pagos||[]).includes(it.rec?m:it.mes);
+const vale=(it,m)=>it.mes<=m&&(!it.ate||m<=it.ate);
 function itensDoMes(m,tipo){
   const cur=curMonth();
-  return state.itens.filter(it=>it.tipo===tipo&&(it.rec?it.mes<=m:(it.mes===m||(m===cur&&it.mes<cur&&!pago(it,it.mes)))));
+  return state.itens.filter(it=>it.tipo===tipo&&(it.rec?vale(it,m):(it.mes===m||(m===cur&&it.mes<cur&&!pago(it,it.mes)))))
+    .sort((a,b)=>(a.rec?m:a.mes).localeCompare(b.rec?m:b.mes)||(a.dia||32)-(b.dia||32));
+}
+function diasAte(it,m){
+  if(!it.dia)return null;
+  const mm=it.rec?m:it.mes,[y,mo]=mm.split('-').map(Number);
+  const d=new Date(y,mo-1,Math.min(it.dia,diasNoMes(mm))),h=new Date();h.setHours(0,0,0,0);
+  return Math.round((d-h)/864e5);
+}
+function subItem(it,m){
+  const S=it.tipo==='saida',p=[];
+  if(it.rec){
+    if(it.ate){const n=monthDiff(it.mes,it.ate)+1,k=monthDiff(it.mes,m)+1;p.push(m>it.ate?`acabou em ${mLabel(it.ate)}`:`parcela ${Math.max(1,k)} de ${n}`)}
+    else p.push('todo mês');
+    if(it.dia)p.push(`dia ${it.dia}`);
+  }else p.push(it.dia?`${String(it.dia).padStart(2,'0')}/${it.mes.slice(5)}`:mLabel(it.mes));
+  if(it.quem)p.push((S?'pra ':'de ')+esc(it.quem));
+  if(pago(it,m))p.push(S?'pago':'recebido');
+  else{
+    const d=diasAte(it,m);
+    if(d===null){if(!it.rec&&it.mes<curMonth())p.push(`<span class="neg">${S?'atrasado':'ainda não entrou'}</span>`)}
+    else if(d<0&&(it.rec?m<=curMonth():true))p.push(`<span class="neg">${S?'atrasado':'ainda não entrou'}</span>`);
+    else if(d===0)p.push(`<span class="neg">${S?'vence hoje':'entra hoje'}</span>`);
+    else if(d<=5)p.push(`<span class="neg">${S?'vence':'entra'} em ${d} ${d===1?'dia':'dias'}</span>`);
+  }
+  return p.join(' · ');
+}
+function linhaItem(it,m,check=true){
+  const S=it.tipo==='saida',on=pago(it,m);
+  return `<div class="item">${check?`<button class="check ${on?'on':''}" data-a="pagar" data-id="${it.id}" data-m="${m}" aria-label="${S?'Marcar como pago':'Marcar como recebido'}">${on?'<i class="ti ti-check"></i>':''}</button>`:''}
+    <div class="d" data-a="editItem" data-id="${it.id}" style="cursor:pointer"><p style="font-weight:500">${esc(it.desc)}</p><p class="mu small">${subItem(it,m)}</p></div>
+    <strong class="${S?'':'pos'}" style="white-space:nowrap">${S?'−':'+'}${brl(it.valor)}</strong></div>`;
 }
 /* cartão */
 function faturaDe(data){
@@ -275,7 +307,7 @@ function projecao(n=7){
   for(const it of state.itens){
     const k=it.tipo==='entrada'?'entra':'sai';
     if(!it.rec){if(pago(it,it.mes))continue;const l=at(it.mes<cur?cur:it.mes);if(l)l[k]+=it.valor}
-    else for(const l of L)if(l.m>=it.mes&&!pago(it,l.m))l[k]+=it.valor;
+    else for(const l of L)if(vale(it,l.m)&&!pago(it,l.m))l[k]+=it.valor;
   }
   const lim=limTotal();
   for(const l of L)if(ativo(l.m))l.dia=l.m===cur?Math.max(0,lim-gastoLimitado(cur)):lim;
@@ -456,12 +488,16 @@ function cardLimites(){
 }
 function cardFixos(){
   const m=ui.mes,fx=itensDoMes(m,'saida');
-  return `<div class="card" id="cFixos"><div class="row"><h3><i class="ti ti-repeat"></i> Fixos do mês</h3><button class="link" data-a="tab" data-t="planejar" data-s="secFix">Gerenciar <i class="ti ti-chevron-right"></i></button></div>
-    ${fx.length?fx.map(it=>`<div class="item"><button class="check ${pago(it,m)?'on':''}" data-a="pagar" data-id="${it.id}" aria-label="Marcar como pago">${pago(it,m)?'<i class="ti ti-check"></i>':''}</button>
-      <div class="d"><p style="font-weight:500">${esc(it.desc)}</p><p class="mu small">${it.rec?'todo mês':'só '+mLabel(it.mes)}${!it.rec&&it.mes<m?' · <span class="neg">atrasado</span>':''}${pago(it,m)?' · pago':''}</p></div>
-      <strong>−${brl(it.valor)}</strong></div>`).join('')
-    :`<div class="empty"><p style="font-weight:700">Nenhum fixo cadastrado</p><p class="mu small" style="margin:2px 0 12px">Cadastre aluguel, contas e assinaturas. Eles aparecem todo mês aqui pra você marcar como pago.</p></div>`}
-    <button class="btn" style="margin-top:10px" data-a="novoItem" data-tipo="saida"><i class="ti ti-plus"></i> Novo fixo</button>
+  return `<div class="card" id="cFixos"><div class="row"><h3><i class="ti ti-repeat"></i> Fixos e contas do mês</h3><button class="link" data-a="tab" data-t="planejar" data-s="secFix">Gerenciar <i class="ti ti-chevron-right"></i></button></div>
+    ${fx.length?fx.map(it=>linhaItem(it,m)).join('')
+    :`<div class="empty"><p style="font-weight:700">Nenhum fixo cadastrado</p><p class="mu small" style="margin:2px 0 12px">Cadastre aluguel, contas, parcelas e assinaturas. Eles aparecem aqui pra você marcar como pago.</p></div>`}
+    <button class="btn" style="margin-top:10px" data-a="novoItem" data-tipo="saida"><i class="ti ti-plus"></i> Novo fixo ou conta</button>
+  </div>`;
+}
+function cardEntradas(){
+  const m=ui.mes,en=itensDoMes(m,'entrada');
+  return `<div class="card"><div class="row"><h3><i class="ti ti-arrow-down-left"></i> Pra entrar no mês</h3><button class="link" data-a="novoItem" data-tipo="entrada"><i class="ti ti-plus"></i> Nova</button></div>
+    ${en.length?en.map(it=>linhaItem(it,m)).join(''):`<p class="mu small" style="margin:8px 0 0">Nada previsto pra entrar. Lance freelas, salário e pagamentos que vão cair na conta.</p>`}
   </div>`;
 }
 function cardFatura(){
@@ -479,7 +515,7 @@ function cardFatura(){
   </div>`;
 }
 function telaInicio(){
-  return topo()+hero()+cardConta()+cardLimites()+cardFixos()+cardFatura();
+  return topo()+hero()+cardConta()+cardFixos()+cardEntradas()+cardLimites()+cardFatura();
 }
 
 /* ---------- transações ---------- */
@@ -548,13 +584,10 @@ function telaJuntar(){
 /* ---------- planejar ---------- */
 function telaPlanejar(){
   const cur=curMonth();
-  const lista=(tipo)=>{const its=state.itens.filter(i=>i.tipo===tipo).sort((a,b)=>a.mes.localeCompare(b.mes));
-    return its.length?its.map(it=>`<div class="item">
-      ${it.rec?'':`<button class="check ${pago(it)?'on':''}" data-a="pagar" data-id="${it.id}" aria-label="Marcar">${pago(it)?'<i class="ti ti-check"></i>':''}</button>`}
-      <div class="d"><p style="font-weight:500">${esc(it.desc)}</p><p class="mu small">${it.rec?`todo mês desde ${mLabel(it.mes)}`:mLabel(it.mes)+(pago(it)?(tipo==='entrada'?' · recebido':' · pago'):'')}</p></div>
-      <strong class="${tipo==='entrada'?'pos':''}" style="white-space:nowrap">${tipo==='entrada'?'+':'−'}${brl(it.valor)}</strong>
-      <button class="del" data-a="delItem" data-id="${it.id}" aria-label="Apagar"><i class="ti ti-x"></i></button></div>`).join('')
-      :`<p class="mu small" style="margin:8px 0 0">${tipo==='entrada'?'Nada a receber lançado.':'Nenhum fixo ou dívida lançado.'}</p>`};
+  const lista=(tipo)=>{const its=state.itens.filter(i=>i.tipo===tipo).sort((a,b)=>(b.rec&&!b.ate)-(a.rec&&!a.ate)||a.mes.localeCompare(b.mes)||(a.dia||32)-(b.dia||32));
+    return its.length?its.map(it=>linhaItem(it,it.rec?(it.mes>cur?it.mes:cur):it.mes,!it.rec)).join('')
+      +`<p class="mu small" style="margin:8px 0 0">Toque num item pra editar ou apagar.</p>`
+      :`<p class="mu small" style="margin:8px 0 0">${tipo==='entrada'?'Nada a receber lançado.':'Nenhum fixo, parcela ou dívida lançado.'}</p>`};
   const P=projecao(7);
   return `<div style="height:8px"></div><h1 class="page">Planejar</h1>
     <div class="card"><div class="row"><div><p class="mu small" style="margin:0">Saldo em conta hoje</p><p style="margin:0;font-size:24px;font-weight:800">${brl(state.saldo)}</p></div><button class="link" data-a="editSaldo">Editar <i class="ti ti-chevron-right"></i></button></div></div>
@@ -640,13 +673,29 @@ function drawSheet(){
       <p class="err" id="shErr"></p><button class="btn" data-a="confirmarMeta">${sh.k==='guardar'?'Guardar':'Tirar'}</button>
       <p class="mu small center" style="margin:10px 0 0">${sh.k==='guardar'?'O dinheiro continua na sua conta, só fica separado pra meta.':'Volta pro livre na conta.'}</p>`);
   }else if(sh.k==='item'){
-    const cur=curMonth();
-    html=shell(sh.tipo==='saida'?'Novo fixo ou conta':'Novo valor a receber',`<form id="itemForm" autocomplete="off">
-      <label class="fl">Descrição</label><input class="f" name="desc" placeholder="${sh.tipo==='saida'?'Ex.: Aluguel, cartão, parcela do curso':'Ex.: Pagamento do cliente X'}">
-      <label class="fl">Valor</label><input class="f" name="valor" placeholder="R$ 0,00" inputmode="decimal">
-      <label class="fl">${sh.tipo==='saida'?'Mês (ou primeiro mês)':'Mês que vai entrar'}</label><select class="f" name="mes">${Array.from({length:14},(_,i)=>addMonth(cur,i)).map(m=>`<option value="${m}">${mLong(m)}</option>`).join('')}</select>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:14px;font-weight:500"><input type="checkbox" name="rec" style="width:18px;height:18px"> Repete todo mês</label>
-      <p class="err" id="shErr"></p><button class="btn" type="submit">Adicionar</button></form>`);
+    const cur=curMonth(),it=sh.id?state.itens.find(i=>i.id===sh.id):null,S=sh.tipo==='saida',rec=it?it.rec:false;
+    const dataUma=it&&!it.rec?it.mes+'-'+String(it.dia||1).padStart(2,'0'):(ui.mes===cur?today():ui.mes+'-01');
+    const inicio=it&&it.rec?it.mes:ui.mes;
+    const mesesIni=Array.from({length:37},(_,i)=>addMonth(cur,i-24));if(!mesesIni.includes(inicio))mesesIni.unshift(inicio);
+    const mesesFim=Array.from({length:61},(_,i)=>addMonth(cur,i));if(it&&it.ate&&!mesesFim.includes(it.ate))mesesFim.unshift(it.ate);
+    html=shell(it?(S?'Editar conta':'Editar entrada'):(S?'Novo fixo ou conta':'Nova entrada'),`<form id="itemForm" autocomplete="off">
+      <label class="fl">Descrição</label><input class="f" name="desc" value="${esc(it?it.desc:'')}" placeholder="${S?'Ex.: Parcela do notebook, conta de luz':'Ex.: Freela, salário'}">
+      <label class="fl">${S?'Valor (de cada mês, se repetir)':'Valor'}</label><input class="f" name="valor" inputmode="decimal" placeholder="R$ 0,00" value="${it?it.valor.toFixed(2).replace('.',','):''}">
+      <label class="fl">${S?'Pagar pra quem? (opcional)':'Vem de quem? (opcional)'}</label><input class="f" name="quem" value="${esc(it&&it.quem||'')}" placeholder="${S?'Ex.: Mãe, Enel, banco':'Ex.: Cliente X'}">
+      <label style="display:flex;gap:9px;align-items:center;margin-top:16px;font-weight:600"><input type="checkbox" name="rec" ${rec?'checked':''} style="width:20px;height:20px;accent-color:#B13A66"> Repete todo mês</label>
+      <div id="gUma" style="display:${rec?'none':'block'}">
+        <label class="fl">${S?'Data de pagar':'Data que entra na conta'}</label><input class="f" type="date" name="data" value="${dataUma}">
+      </div>
+      <div id="gRec" style="display:${rec?'block':'none'}">
+        <div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:8px">
+          <div><label class="fl">${S?'Primeira parcela/mês':'Começa em'}</label><select class="f" name="mes">${mesesIni.map(m=>`<option value="${m}" ${m===inicio?'selected':''}>${mLabel(m)}</option>`).join('')}</select></div>
+          <div><label class="fl">${S?'Dia de pagar':'Dia que entra'}</label><input class="f" name="dia" inputmode="numeric" placeholder="Ex.: 10" value="${it&&it.rec&&it.dia?it.dia:''}"></div>
+        </div>
+        <label class="fl">Até quando?</label><select class="f" name="ate"><option value="">Sem data pra acabar (conta fixa)</option>${mesesFim.map(m=>`<option value="${m}" ${it&&it.ate===m?'selected':''}>Última em ${mLabel(m)}</option>`).join('')}</select>
+        <p class="mu small" id="parcInfo" style="margin:6px 0 0"></p>
+      </div>
+      <p class="err" id="shErr"></p><button class="btn" type="submit">${it?'Salvar':'Adicionar'}</button>
+      ${it?`<button class="link" type="button" style="margin:14px auto 0;display:block;color:var(--pink)" data-a="delItem" data-id="${it.id}">Apagar</button>`:''}</form>`);
   }else if(sh.k==='meta'){
     const cur=curMonth();
     html=shell('Nova meta',`<form id="metaForm" autocomplete="off">
@@ -667,6 +716,15 @@ function drawSheet(){
       ${state.cartao?'<button class="link" type="button" style="margin:14px auto 0;display:block;color:var(--pink)" data-a="delCartao">Remover cartão</button>':''}</form>`);
   }
   $('sheet').innerHTML=html;
+  const fi=$('itemForm');
+  if(fi){
+    const info=()=>{const p=$('parcInfo');if(!fi.ate.value){p.textContent='Fica todo mês até você apagar.';return}
+      if(fi.ate.value<fi.mes.value){p.innerHTML='<span class="neg">A última precisa ser depois da primeira.</span>';return}
+      const n=monthDiff(fi.mes.value,fi.ate.value)+1,v=parseValor(fi.valor.value);
+      p.textContent=`São ${n} ${n===1?'mês':'meses'} (${mLabel(fi.mes.value)} a ${mLabel(fi.ate.value)})${v?` · total ${brl(r2(v*n))}`:''}`};
+    fi.rec.onchange=()=>{$('gUma').style.display=fi.rec.checked?'none':'block';$('gRec').style.display=fi.rec.checked?'block':'none'};
+    fi.mes.onchange=fi.ate.onchange=fi.valor.oninput=info;info();
+  }
   const f=$('sheet').querySelector('form');if(f){f.oninput=()=>{const e=$('shErr');if(e)e.textContent=''};setTimeout(()=>{const i=f.querySelector('input');if(i&&sh.k!=='saldo')i.focus();else if(i){i.focus();i.select()}},60)}
 }
 function syncSheet(){if(!sh)return;const n=$('shNota'),d=$('shData'),p=$('shParc');if(n)sh.nota=n.value;if(d&&d.value)sh.data=d.value;if(p)sh.parcelas=+p.value}
@@ -739,15 +797,16 @@ document.addEventListener('click',async e=>{
     }
     case 'novaMeta':openSheet({k:'meta'});return;
     case 'novoItem':openSheet({k:'item',tipo:b.dataset.tipo});return;
+    case 'editItem':{const it=state.itens.find(i=>i.id===id);if(it)openSheet({k:'item',tipo:it.tipo,id});return}
     case 'pagar':{
       const it=state.itens.find(i=>i.id===id);if(!it)return;
-      const m=it.rec?ui.mes:it.mes;it.pagos=it.pagos||[];
+      const m=it.rec?(b.dataset.m||ui.mes):it.mes;it.pagos=it.pagos||[];
       const on=it.pagos.includes(m);
       if(on)it.pagos=it.pagos.filter(x=>x!==m);else it.pagos.push(m);
       const d=(it.tipo==='entrada'?1:-1)*(on?-1:1)*it.valor;state.saldo=r2(state.saldo+d);
       await save();render();toast(`Saldo ${d>0?'+':'−'}${brl(Math.abs(d))}`);return;
     }
-    case 'delItem':{const it=state.itens.find(i=>i.id===id);if(!it||!confirm(`Apagar "${it.desc}"?`))return;state.itens=state.itens.filter(i=>i.id!==id);await save();render();return}
+    case 'delItem':{const it=state.itens.find(i=>i.id===id);if(!it||!confirm(`Apagar "${it.desc}"?`))return;state.itens=state.itens.filter(i=>i.id!==id);closeSheet();await save();render();return}
     case 'editLim':ui.editLim=true;render('secLim');return;
     case 'saveLim':{
       let ok=true;
@@ -778,8 +837,15 @@ document.addEventListener('submit',async e=>{
     e.preventDefault();const desc=f.desc.value.trim(),v=parseValor(f.valor.value);
     if(!desc){err.textContent='Escreva uma descrição.';return}
     if(!v){err.textContent='Digite um valor, ex.: 1.375,00';return}
-    state.itens.push({id:uid(),tipo:sh.tipo,desc,valor:v,mes:f.mes.value,rec:f.rec.checked,pagos:[]});
-    closeSheet();await save();render();toast('Adicionado');
+    const rec=f.rec.checked;let mes,dia,ate=null;
+    if(!rec){if(!f.data.value){err.textContent='Escolha a data.';return}mes=f.data.value.slice(0,7);dia=+f.data.value.slice(8)}
+    else{mes=f.mes.value;dia=parseInt(f.dia.value,10);
+      if(!(dia>=1&&dia<=31)){err.textContent=sh.tipo==='saida'?'Coloque o dia de pagar (1 a 31).':'Coloque o dia que entra (1 a 31).';return}
+      ate=f.ate.value||null;if(ate&&ate<mes){err.textContent='A última precisa ser depois da primeira.';return}}
+    const dados={tipo:sh.tipo,desc,valor:v,mes,dia,rec,ate,quem:f.quem.value.trim()};
+    const old=sh.id&&state.itens.find(i=>i.id===sh.id);
+    if(old)Object.assign(old,dados);else state.itens.push({id:uid(),...dados,pagos:[]});
+    closeSheet();await save();render();toast(old?'Salvo':'Adicionado');
   }else if(f.id==='metaForm'){
     e.preventDefault();const nome=f.nome.value.trim(),v=parseValor(f.alvo.value);
     if(!nome){err.textContent='Dê um nome pra meta.';return}
