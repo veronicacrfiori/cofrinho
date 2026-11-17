@@ -662,7 +662,8 @@ function drawSheet(){
         <button class="more" data-a="more">Data, nota e mais <i class="ti ti-chevron-${sh.more?'up':'down'}"></i></button>
         ${sh.more?`<label class="fl" style="margin-top:0">Nota</label><input class="f" id="shNota" placeholder="Ex.: Uber pro metrô" value="${esc(sh.nota)}">
           <label class="fl">Data</label><input class="f" type="date" id="shData" value="${sh.data}">
-          ${temCartao&&sh.conta==='cartao'?`<label class="fl">Parcelado</label><select class="f" id="shParc">${Array.from({length:12},(_,i)=>`<option value="${i+1}" ${sh.parcelas===i+1?'selected':''}>${i?`${i+1}x de ${brl(r2(v/(i+1)))}`:'À vista'}</option>`).join('')}</select>`:''}`:''}
+          ${temCartao&&sh.conta==='cartao'?`<label class="fl">Parcelado</label><select class="f" id="shParc">${Array.from({length:12},(_,i)=>`<option value="${i+1}" ${sh.parcelas===i+1?'selected':''}>${i?`${i+1}x de ${brl(r2(v/(i+1)))}`:'À vista'}</option>`).join('')}</select>`
+            :`<label style="display:flex;gap:9px;align-items:flex-start;margin-top:14px;font-size:14px"><input type="checkbox" id="shSem" ${sh.semSaldo?'checked':''} style="width:20px;height:20px;flex:none;accent-color:#B13A66"><span><b>${sh.tipo==='gasto'?'Já saiu do meu saldo':'Já está no meu saldo'}</b><br><span class="mu small">Marque se o saldo do app já está certo e esse lançamento é só pra registro.</span></span></label>`}`:''}
         <p class="err" id="shErr" style="min-height:0"></p>
         <button class="btn" style="margin-top:14px" data-a="lancar">${sh.tipo==='gasto'?'Lançar gasto':'Lançar receita'}</button>`);
     }
@@ -672,6 +673,15 @@ function drawSheet(){
     html=shell(sh.k==='guardar'?`Guardar pra ${esc(mt.nome.toLowerCase())}`:`Tirar de ${esc(mt.nome.toLowerCase())}`,`<p class="amount" style="margin-top:14px">${money(v)}</p><p class="hint">${hint}</p>${pad()}
       <p class="err" id="shErr"></p><button class="btn" data-a="confirmarMeta">${sh.k==='guardar'?'Guardar':'Tirar'}</button>
       <p class="mu small center" style="margin:10px 0 0">${sh.k==='guardar'?'O dinheiro continua na sua conta, só fica separado pra meta.':'Volta pro livre na conta.'}</p>`);
+  }else if(sh.k==='pagar'){
+    const it=state.itens.find(i=>i.id===sh.id),S=it.tipo==='saida';
+    html=shell(S?'Marcar como pago':'Marcar como recebido',`
+      <div class="card" style="margin:14px 0 6px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="min-width:0"><p class="nm" style="margin:0">${esc(it.desc)}</p><p class="mu small" style="margin:0">${subItem(it,sh.m)}</p></div>
+        <strong style="white-space:nowrap">${S?'−':'+'}${brl(it.valor)}</strong></div>
+      <p class="mu small" style="margin:8px 0 14px">${S?'Esse dinheiro já saiu da sua conta antes de você lançar aqui?':'Esse dinheiro já estava contado no seu saldo do app?'}</p>
+      <button class="btn" data-a="pagarOk" data-modo="agora">${S?'Paguei agora · descontar do saldo':'Recebi agora · somar no saldo'}</button>
+      <button class="btn sec" style="margin-top:8px;background:var(--card)" data-a="pagarOk" data-modo="antes">${S?'Já tinha pago · só marcar':'Já estava no saldo · só marcar'}</button>`);
   }else if(sh.k==='item'){
     const cur=curMonth(),it=sh.id?state.itens.find(i=>i.id===sh.id):null,S=sh.tipo==='saida',rec=it?it.rec:false;
     const dataUma=it&&!it.rec?it.mes+'-'+String(it.dia||1).padStart(2,'0'):(ui.mes===cur?today():ui.mes+'-01');
@@ -727,7 +737,7 @@ function drawSheet(){
   }
   const f=$('sheet').querySelector('form');if(f){f.oninput=()=>{const e=$('shErr');if(e)e.textContent=''};setTimeout(()=>{const i=f.querySelector('input');if(i&&sh.k!=='saldo')i.focus();else if(i){i.focus();i.select()}},60)}
 }
-function syncSheet(){if(!sh)return;const n=$('shNota'),d=$('shData'),p=$('shParc');if(n)sh.nota=n.value;if(d&&d.value)sh.data=d.value;if(p)sh.parcelas=+p.value}
+function syncSheet(){if(!sh)return;const n=$('shNota'),d=$('shData'),p=$('shParc'),s=$('shSem');if(n)sh.nota=n.value;if(d&&d.value)sh.data=d.value;if(p)sh.parcelas=+p.value;if(s)sh.semSaldo=s.checked}
 function padKey(k){
   if(!sh||!('cents' in sh))return;
   let t=sh.txt||'';
@@ -772,13 +782,14 @@ document.addEventListener('click',async e=>{
     case 'more':sh.more=!sh.more;drawSheet();return;
     case 'lancar':{
       const v=sh.cents/100,conta=sh.tipo==='gasto'&&state.cartao?sh.conta:'conta';
-      state.lanc.push({id:uid(),tipo:sh.tipo,valor:v,cat:sh.tipo==='gasto'?sh.cat:null,nota:sh.nota.trim(),data:sh.data,conta,parcelas:conta==='cartao'?sh.parcelas:1,criado:Date.now()});
-      if(conta==='conta')state.saldo=r2(state.saldo+(sh.tipo==='gasto'?-v:v));
+      const semSaldo=conta==='conta'&&!!sh.semSaldo;
+      state.lanc.push({id:uid(),tipo:sh.tipo,valor:v,cat:sh.tipo==='gasto'?sh.cat:null,nota:sh.nota.trim(),data:sh.data,conta,parcelas:conta==='cartao'?sh.parcelas:1,semSaldo,criado:Date.now()});
+      if(conta==='conta'&&!semSaldo)state.saldo=r2(state.saldo+(sh.tipo==='gasto'?-v:v));
       const t=sh.tipo;closeSheet();await save();render();toast(t==='gasto'?`Gasto de ${brl(v)} anotado`:`Receita de ${brl(v)} anotada`);return;
     }
     case 'delLanc':{
       const l=state.lanc.find(x=>x.id===id);if(!l||!confirm('Apagar esse lançamento?'))return;
-      state.lanc=state.lanc.filter(x=>x.id!==id);if(l.conta!=='cartao')state.saldo=r2(state.saldo+(l.tipo==='gasto'?l.valor:-l.valor));
+      state.lanc=state.lanc.filter(x=>x.id!==id);if(l.conta!=='cartao'&&!l.semSaldo)state.saldo=r2(state.saldo+(l.tipo==='gasto'?l.valor:-l.valor));
       await save();render();return;
     }
     case 'guardar':case 'tirar':openSheet({k:a,meta:id,cents:0});return;
@@ -800,11 +811,19 @@ document.addEventListener('click',async e=>{
     case 'editItem':{const it=state.itens.find(i=>i.id===id);if(it)openSheet({k:'item',tipo:it.tipo,id});return}
     case 'pagar':{
       const it=state.itens.find(i=>i.id===id);if(!it)return;
-      const m=it.rec?(b.dataset.m||ui.mes):it.mes;it.pagos=it.pagos||[];
-      const on=it.pagos.includes(m);
-      if(on)it.pagos=it.pagos.filter(x=>x!==m);else it.pagos.push(m);
-      const d=(it.tipo==='entrada'?1:-1)*(on?-1:1)*it.valor;state.saldo=r2(state.saldo+d);
-      await save();render();toast(`Saldo ${d>0?'+':'−'}${brl(Math.abs(d))}`);return;
+      const m=it.rec?(b.dataset.m||ui.mes):it.mes;it.pagos=it.pagos||[];it.semSaldo=it.semSaldo||[];
+      if(!it.pagos.includes(m)){openSheet({k:'pagar',id,m});return}
+      it.pagos=it.pagos.filter(x=>x!==m);
+      if(it.semSaldo.includes(m)){it.semSaldo=it.semSaldo.filter(x=>x!==m);await save();render();toast('Desmarcado');return}
+      const d=(it.tipo==='entrada'?-1:1)*it.valor;state.saldo=r2(state.saldo+d);
+      await save();render();toast(`Desmarcado · saldo ${d>0?'+':'−'}${brl(Math.abs(d))}`);return;
+    }
+    case 'pagarOk':{
+      const it=state.itens.find(i=>i.id===sh.id),m=sh.m;if(!it)return;
+      it.pagos=it.pagos||[];it.semSaldo=it.semSaldo||[];if(!it.pagos.includes(m))it.pagos.push(m);
+      if(b.dataset.modo==='antes'){it.semSaldo.push(m);closeSheet();await save();render();toast('Marcado, sem mexer no saldo');return}
+      const d=(it.tipo==='entrada'?1:-1)*it.valor;state.saldo=r2(state.saldo+d);
+      closeSheet();await save();render();toast(`Marcado · saldo ${d>0?'+':'−'}${brl(Math.abs(d))}`);return;
     }
     case 'delItem':{const it=state.itens.find(i=>i.id===id);if(!it||!confirm(`Apagar "${it.desc}"?`))return;state.itens=state.itens.filter(i=>i.id!==id);closeSheet();await save();render();return}
     case 'editLim':ui.editLim=true;render('secLim');return;
